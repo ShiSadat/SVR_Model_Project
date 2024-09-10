@@ -149,3 +149,509 @@ function avg_r2 = crossValSVR(X, y, cv_tune, C, epsilon)
 
     avg_r2 = mean(r2_scores);
 end
+function [X, y] = removeNoiseUsingZScore(X, y)
+    % Remove outliers using Z-score
+    [Z_X, muX, sigmaX] = zscore(X);
+    [Z_y, muY, sigmaY] = zscore(y);
+    
+    thresholdX = 1.8; % Define threshold
+    thresholdY = 0.18;
+    
+    disp('Z_X and Z_y with Indexes:');
+    for i = 1:size(Z_X, 1)
+        disp(['Index: ', num2str(i), ...
+              ', Z_X: ', num2str(Z_X(i, :)), ...
+              ', Z_y: ', num2str(Z_y(i))]);
+    end
+    % Create separate logical arrays for X and y outliers
+    outliers_X = any(abs(Z_X) > thresholdX, 2);
+    outliers_y = abs(Z_y) > thresholdY;
+    
+    % Combine X and y outliers
+    outliers = outliers_X | outliers_y;
+    
+    % Find indices of outliers
+    outlier_indices = find(outliers);
+    
+    % Display information about outliers
+    disp('Outliers:');
+    disp('Index | Outlier in X/y | Values');
+    for i = 1:length(outlier_indices)
+        idx = outlier_indices(i);
+        outlier_type = '';
+        if outliers_X(idx)
+            outlier_type = 'X';
+        end
+        if outliers_y(idx)
+            outlier_type = [outlier_type 'y'];
+        end
+        disp([num2str(idx), ' | Outlier in: ', outlier_type, ' | X: ', num2str(X(idx,:)), ' | Z_scoreY: ', num2str(abs(Z_y(idx))), ', y: ', num2str(y(idx))]);
+    end
+    
+    % Remove outliers
+    X = X(~outliers, :);
+    y = y(~outliers);
+
+    disp(['Removed ', num2str(sum(outliers)), ' noisy samples using Z-score method.']);
+end
+
+% Helper functions for plotting
+function plotActualVsPredicted(y_true, y_pred, target, savePath)
+    % Plot Actual vs Predicted
+    figure;
+    scatter(y_true, y_pred, 'b', 'filled', 'MarkerFaceAlpha', 0.6);
+    hold on;
+    plot([min(y_true), max(y_true)], [min(y_true), max(y_true)], 'k--', 'LineWidth', 3);
+    xlabel('Actual');
+    ylabel('Predicted');
+    title(['Actual vs Predicted ', strrep(target, '_', ' ')]);
+    saveas(gcf, fullfile(savePath, ['actual_vs_predicted_', target, '.png']));
+    close;
+end
+
+function plotResiduals(y_true, y_pred, target, savePath)
+    % Plot Residuals
+    residuals = y_true - y_pred;
+    figure;
+    scatter(y_pred, residuals, 'r', 'filled', 'MarkerFaceAlpha', 0.6);
+    hold on;
+    yline(0, 'k--');
+    xlabel('Predicted');
+    ylabel('Residuals');
+    title(['Residual Plot of ', strrep(target, '_', ' ')]);
+    saveas(gcf, fullfile(savePath, ['residual_plot_', target, '.png']));
+    close;
+end
+
+function plotCorrelationMatrix(data, savePath)
+    % Plot Correlation Matrix
+    figure;
+    corrMatrix = corr(data{:,:});
+    heatmap(data.Properties.VariableNames, data.Properties.VariableNames, corrMatrix, 'Colormap', jet, 'ColorLimits', [-1, 1]);
+    title('Correlation Matrix');
+    saveas(gcf, fullfile(savePath, 'correlation_matrix.png'));
+    close;
+end
+
+function predictWithSavedModel(modelFileName, newParameters)
+    % Load the saved model and scaling parameters
+    loadedData = load(modelFileName);
+    svr = loadedData.bestModel;
+    mu = loadedData.mu;
+    sigma = loadedData.sigma;
+    r2 = loadedData.r2;
+    mse = loadedData.mse;
+    % Display the loaded model details
+    disp('Loaded Model Details:');
+    disp(svr);
+    disp('r2 :');
+    disp(r2);
+    disp('mse:');
+    disp(mse);
+    % Display the Alpha
+    disp('Alpha:');
+    disp(svr.Alpha);
+    disp('SupportVector:');
+    disp(svr.SupportVectors);
+ 
+
+    % Scale the new parameters
+    newParametersScaled = (newParameters - mu) ./ sigma;
+    
+    % Make prediction
+    predictedValue = predict(svr, newParametersScaled);
+    
+    % Display the prediction
+    disp(['Predicted Value: ', num2str(predictedValue)]);
+end
+
+
+% Call the function with the specified file
+%SVRML('XYZ deformation-implant.csv');
+
+
+function extractSVREquation(modelFileName)
+    % Load the saved model and scaling parameters
+    loadedData = load(modelFileName);
+    svr = loadedData.bestModel;
+    mu = loadedData.mu;
+    sigma = loadedData.sigma;
+    r2 = loadedData.r2;
+    mse = loadedData.mse;
+
+    % Display the loaded model details
+    disp('Loaded Model Details:');
+    disp(svr);
+    disp('r2 :');
+    disp(r2);
+    disp('mse:');
+    disp(mse);
+
+    % Extract model parameters
+    supportVectors = svr.SupportVectors;
+    alpha = svr.Alpha;
+    bias = svr.Bias;
+    kernelScale = svr.KernelParameters.Scale;
+    gamma = 1 / (2 * kernelScale^2);
+    disp('alpha:');
+    disp(num2str(alpha));
+    disp('boxConstraints:');
+    disp(num2str(svr.BoxConstraints))
+
+
+    % Define symbolic variables for the features
+    numFeatures = size(supportVectors, 2);
+    syms x [1 numFeatures];
+
+    % Initialize the equation with the bias term
+    equation = bias;
+
+    % Iterate over each support vector to build the equation
+    for i = 1:length(alpha)
+        % Compute the squared Euclidean distance
+        distanceSquared = sum((supportVectors(i, :) - x).^2);
+        
+        % Compute the RBF kernel output
+        kernelOutput = exp(-gamma * distanceSquared);
+        
+        % Update the equation
+        equation = equation + alpha(i) * kernelOutput;
+    end
+
+    % Display the final equation
+    disp('The extracted equation is:');
+    disp(equation);
+    
+    % You can save the symbolic equation to a file if needed
+    % save('extracted_equation.mat', 'equation');
+end
+
+function extractShortSVREquation(modelFileName, k)
+    % Load the saved model and scaling parameters
+    loadedData = load(modelFileName);
+    svr = loadedData.bestModel;
+    mu = loadedData.mu;
+    sigma = loadedData.sigma;
+    r2 = loadedData.r2;
+    mse = loadedData.mse;
+
+    % Display the loaded model details
+    disp('Loaded Model Details:');
+    disp(svr);
+    disp('r2 :');
+    disp(r2);
+    disp('mse:');
+    disp(mse);
+
+    % Extract model parameters
+    supportVectors = svr.SupportVectors;
+    alpha = svr.Alpha;
+    bias = svr.Bias;
+    kernelScale = svr.KernelParameters.Scale;
+    gamma = 1 / (2 * kernelScale^2);
+
+    % Sort the alphas by their absolute values and take the top k
+    [~, idx] = sort(abs(alpha), 'descend');
+    topKIdx = idx(1:k);
+
+    % Define symbolic variables for the features
+    numFeatures = size(supportVectors, 2);
+    syms x [1 numFeatures];
+
+    % Initialize the equation with the bias term
+    equation = bias;
+
+    % Iterate over the top k support vectors to build the simplified equation
+    for i = topKIdx'
+        % Compute the squared Euclidean distance
+        distanceSquared = sum((supportVectors(i, :) - x).^2);
+        
+        % Compute the RBF kernel output
+        kernelOutput = exp(-gamma * distanceSquared);
+        
+        % Update the equation
+        equation = equation + alpha(i) * kernelOutput;
+    end
+
+    % Display the final simplified equation
+    disp(['The extracted equation with top ', num2str(k), ' support vectors is:']);
+    disp(equation);
+    
+    % You can save the symbolic equation to a file if needed
+    % save('extracted_short_equation.mat', 'equation');
+end
+function evaluateFullSVRModel(modelFileName, newFileName, featureColumns, targetColumn, k)
+    % Load the saved model and scaling parameters
+    loadedData = load(modelFileName);
+    svr = loadedData.bestModel;
+    mu = loadedData.mu;
+    sigma = loadedData.sigma;
+    original_r2 = loadedData.r2;
+
+    disp(['Original model R² (from training): ', num2str(original_r2)]);
+
+    % Extract model parameters
+    supportVectors = svr.SupportVectors;
+    alpha = svr.Alpha;
+    bias = svr.Bias;
+    kernelScale = svr.KernelParameters.Scale;
+    gamma = 1 / (2 * kernelScale^2);
+
+    % Sort the alphas by their absolute values and take the top k
+    if k > length(alpha)
+        k = length(alpha);  % Ensure k does not exceed the number of support vectors
+    end
+    [~, idx] = sort(abs(alpha), 'descend');
+    topKIdx = idx(1:k);
+
+    % Create symbolic variables for the equation
+    syms x [1 length(featureColumns)];
+
+    % Build the equation using the top k support vectors
+    shortEquation = bias;
+    for i = topKIdx'
+        distanceSquared = sum((supportVectors(i, :) - x).^2);
+        kernelOutput = exp(-gamma * distanceSquared);
+        shortEquation = shortEquation + alpha(i) * kernelOutput;
+    end
+
+    % Print the shortened equation
+    disp(['The shortened SVR equation with top ', num2str(k), ' support vectors is:']);
+    disp(shortEquation);
+    % Load new data from the specified Excel file
+    data = readtable(newFileName, 'VariableNamingRule', 'preserve');
+    
+    % Add an index column to the table
+    data.Index = (1:height(data))';
+    
+    % Move the index column to the first position for better readability
+    data = movevars(data, 'Index', 'Before', 1);
+
+    % Display the table with the index
+    disp('All data with index:');
+    disp(data);
+
+    % Check if all feature columns exist in the table
+    missingColumns = setdiff([featureColumns, targetColumn], data.Properties.VariableNames);
+    if ~isempty(missingColumns)
+        error('The following columns are missing from the data: %s', strjoin(missingColumns, ', '));
+    end
+
+    % Extract features and target
+    X_new = data{:, featureColumns};
+    y_new = data{:, targetColumn};
+    [X_new, y_new] = removeNoiseUsingZScore(X_new, y_new);
+
+    % Scale the new data using the same scaling parameters
+    X_new_scaled = (X_new - mu) ./ sigma;
+
+    % Predict using the full model
+    y_pred_model = predict(svr, X_new_scaled);
+
+    % Predict using the shortened equation
+    y_pred_shortEquation = zeros(size(y_new));
+    for i = 1:size(X_new_scaled, 1)
+        y_pred_shortEquation(i) = double(subs(shortEquation, x, X_new_scaled(i, :)));
+    end
+    for i = 1:size(X_new_scaled,2)
+                plotSVRDecisionBoundary(svr, X_new(:,i),y_new , targetColumn,'S:\SHIMA\Project\SVR MODEL' )
+    end
+    
+    % Compute the accuracy of the full model and shortened equation on the new data
+    mse_model = mean((y_new - y_pred_model).^2);
+    r2_model = 1 - sum((y_new - y_pred_model).^2) / sum((y_new - mean(y_new)).^2);
+    
+    mse_shortEquation = mean((y_new - y_pred_shortEquation).^2);
+    r2_shortEquation = 1 - sum((y_new - y_pred_shortEquation).^2) / sum((y_new - mean(y_new)).^2);
+
+    % Display the accuracy metrics
+    disp('Performance on new data using the full model:');
+    disp(['Mean Squared Error: ', num2str(mse_model)]);
+    disp(['R-squared Score: ', num2str(r2_model)]);
+    
+    disp(['Performance on new data using the shortened equation (top ', num2str(k), ' support vectors):']);
+    disp(['Mean Squared Error: ', num2str(mse_shortEquation)]);
+    disp(['R-squared Score: ', num2str(r2_shortEquation)]);
+
+    % Optional: Plot predicted vs actual values
+    figure;
+    scatter(y_new, y_pred_model, 'b', 'DisplayName', 'Model Prediction');
+    hold on;
+    scatter(y_new, y_pred_shortEquation, 'r', 'DisplayName', 'Shortened Equation Prediction');
+    plot([min(y_new), max(y_new)], [min(y_new), max(y_new)], 'k--', 'DisplayName', 'Perfect Prediction');
+    xlabel('Actual Values');
+    ylabel('Predicted Values');
+    title('Predicted vs Actual Values');
+    legend('Location', 'best');
+    hold off;
+end
+
+function illustrateFeatureDependence(modelFileName, newFileName, featureColumns, targetColumn, k)
+    % Load the saved model and scaling parameters
+    loadedData = load(modelFileName);
+    svr = loadedData.bestModel;
+    mu = loadedData.mu;
+    sigma = loadedData.sigma;
+    original_r2 = loadedData.r2;
+
+    disp(['Original model R² (from training): ', num2str(original_r2)]);
+
+    % Extract model parameters
+    supportVectors = svr.SupportVectors;
+    alpha = svr.Alpha;
+    bias = svr.Bias;
+    kernelScale = svr.KernelParameters.Scale;
+    gamma = 1 / (2 * kernelScale^2);
+
+    % Sort the alphas by their absolute values and take the top k
+    if k > length(alpha)
+        k = length(alpha);  % Ensure k does not exceed the number of support vectors
+    end
+    [~, idx] = sort(abs(alpha), 'descend');
+    topKIdx = idx(1:k);
+
+    % Create symbolic variables for the equation
+    syms x [1 length(featureColumns)];
+
+    % Build the equation using the top k support vectors
+    shortEquation = bias;
+    for i = topKIdx'
+        distanceSquared = sum((supportVectors(i, :) - x).^2);
+        kernelOutput = exp(-gamma * distanceSquared);
+        shortEquation = shortEquation + alpha(i) * kernelOutput;
+    end
+
+    % Print the shortened equation
+    disp(['The shortened SVR equation with top ', num2str(k), ' support vectors is:']);
+    disp(shortEquation);
+
+    % Load new data from the specified Excel file
+    data = readtable(newFileName, 'VariableNamingRule', 'preserve');
+
+    % Add an index column to the table
+    data.Index = (1:height(data))';
+
+    % Move the index column to the first position for better readability
+    data = movevars(data, 'Index', 'Before', 1);
+
+    % Display the table with the index
+    disp('All data with index:');
+    disp(data);
+
+    % Check if all feature columns exist in the table
+    missingColumns = setdiff([featureColumns, targetColumn], data.Properties.VariableNames);
+    if ~isempty(missingColumns)
+        error('The following columns are missing from the data: %s', strjoin(missingColumns, ', '));
+    end
+
+    % Extract features and target
+    X_new = data{:, featureColumns};
+    y_new = data{:, targetColumn};
+    [X_new, y_new] = removeNoiseUsingZScore(X_new, y_new);
+
+    % Scale the new data using the same scaling parameters
+    X_new_scaled = (X_new - mu) ./ sigma;
+
+    % Predict using the full model
+    y_pred_model = predict(svr, X_new_scaled);
+
+    % Predict using the shortened equation
+    y_pred_shortEquation = zeros(size(y_new));
+    for i = 1:size(X_new_scaled, 1)
+        y_pred_shortEquation(i) = double(subs(shortEquation, x, X_new_scaled(i, :)));
+    end
+
+    % Compute the accuracy of the full model and shortened equation on the new data
+    mse_model = mean((y_new - y_pred_model).^2);
+    r2_model = 1 - sum((y_new - y_pred_model).^2) / sum((y_new - mean(y_new)).^2);
+
+    mse_shortEquation = mean((y_new - y_pred_shortEquation).^2);
+    r2_shortEquation = 1 - sum((y_new - y_pred_shortEquation).^2) / sum((y_new - mean(y_new)).^2);
+
+    % Display the accuracy metrics
+    disp('Performance on new data using the full model:');
+    disp(['Mean Squared Error: ', num2str(mse_model)]);
+    disp(['R-squared Score: ', num2str(r2_model)]);
+
+    disp(['Performance on new data using the shortened equation (top ', num2str(k), ' support vectors):']);
+    disp(['Mean Squared Error: ', num2str(mse_shortEquation)]);
+    disp(['R-squared Score: ', num2str(r2_shortEquation)]);
+
+    % Optional: Plot predicted vs actual values
+    figure;
+    scatter(y_new, y_pred_model, 'b', 'DisplayName', 'Model Prediction');
+    hold on;
+    scatter(y_new, y_pred_shortEquation, 'r', 'DisplayName', 'Shortened Equation Prediction');
+    plot([min(y_new), max(y_new)], [min(y_new), max(y_new)], 'k--', 'DisplayName', 'Perfect Prediction');
+    xlabel('Actual Values');
+    ylabel('Predicted Values');
+    title('Predicted vs Actual Values');
+    legend('Location', 'best');
+    hold off;
+
+    % Illustrate the effect of each feature independently
+    for j = 1:length(featureColumns)
+        featureName = featureColumns{j};
+        disp(['Illustrating effect of ', featureName]);
+
+        figure;
+        hold on;
+        xlabel('Feature Value');
+        ylabel('Predicted Value');
+        title(['Effect of ', strrep(featureName, '_', ' '), ' on ', targetColumn]);
+
+        % Vary the selected feature while keeping others at their mean
+        X_varied = mean(X_new_scaled);
+        X_varied = repmat(X_varied, 100, 1);
+
+        % Generate values for the current feature
+        featureRange = linspace(min(X_new_scaled(:, j)), max(X_new_scaled(:, j)), 100);
+        X_varied(:, j) = featureRange;
+
+        % Predict using the full model
+        y_varied = predict(svr, X_varied);
+
+        % Plot the effect
+        plot(featureRange, y_varied, '-b', 'LineWidth', 2);
+
+        saveas(gcf, fullfile(pwd, ['Effect_of_', featureName, '_on_', targetColumn, '.png']));
+        hold off;
+    end
+end
+% Helper function to plot SVR decision boundary and margins
+function plotSVRDecisionBoundary(model, X, y, target, savePath)
+    % Ensure X is a column vector (single feature) and y is the target variable
+    if size(X, 2) ~= 1
+        error('The feature matrix X must have exactly one column.');
+    end
+    % Create a range of feature values for plotting the regression line
+    X_range = linspace(min(X), max(X), 100)';
+
+    % Plotting
+    figure;
+    hold on;
+
+    % Scatter plot of data points
+    scatter(X, y, 'b', 'filled', 'MarkerFaceColor', 'b');
+
+    % Plot the SVR regression line
+    plot(X, y, 'r-', 'LineWidth', 2);
+
+    % Plot the epsilon margins
+    epsilon = model.Epsilon;
+    plot(X, y + epsilon, 'k--', 'LineWidth', 1);
+    plot(X, y - epsilon, 'k--', 'LineWidth', 1);
+
+    % Plot the support vectors
+    scatter(supportVectors, supportVectorTargets, 'ko', 'MarkerSize', 8, 'LineWidth', 1.5);
+
+    % Labels and Title
+    xlabel('Feature');
+    ylabel('Target');
+    title(['SVR Decision Boundary with Support Vectors for ', strrep(target, '_', ' ')]);
+    legend('Data Points', 'SVR Prediction', 'Epsilon Margin', 'Support Vectors', 'Location', 'Best');
+    
+    % Save the plot
+    saveas(gcf, fullfile(savePath, ['svr_decision_boundary_', target, '.png']));
+    close;
+end
